@@ -10,6 +10,20 @@ I went with **BullMQ** here instead of basic cron jobs because you explicitly ne
 - **Rate limiting**: I used a Redis tracking key pattern (`rate:{senderId}:{currentHourWindow}`) and `INCR`. If a sender hits the limit, we don't drop the work — we reschedule the job with a `delay` pushing it into the *next* hour bucket.
 - **Concurrency**: `WORKER_CONCURRENCY` handles standard BullMQ parallel processing.
 
+## 🚀 Technical Feature Mapping
+
+| Component | Backend / Infrastructure | Frontend / UI |
+|---|---|---|
+| **Authentication** | Passport.js + Google OAuth 2.0 | Protected Routes + Google Login |
+| **Email Scheduling** | **BullMQ** (Redis-backed delayed jobs) | **Datetime Picker** + JSON payloads |
+| **Bulk Processing** | **Node.js Parsing** (Email Regex Validation) | Client-side **CSV Detection Count** |
+| **Persistence** | **PostgreSQL 15** + Prisma ORM | Real-time **Job Status Badges** |
+| **Rate Limiting** | **Atomic Redis Counters** (per sender/hour) | Feedback on rescheduled jobs |
+| **Throughput Control** | BullMQ **Limiter** (enforces `MIN_DELAY_MS`) | User-defined delay configuration |
+| **Error Handling** | Try/Catch + **Database Error Logging** | Failed status UI + **Error Message display** |
+| **Orphan Recovery** | **syncQueue()** (Resyncs DB to Redis on boot) | Data consistency across worker crashes |
+| **SMTP Delivery** | Nodemailer Integration | Status tracking from "Scheduled" to "Sent" |
+
 ## 1. Setup Infra (PostgreSQL + Redis)
 
 Just run Docker Compose to bring up Postgres 15 and Redis 7 (with AOF persistence configured!).
