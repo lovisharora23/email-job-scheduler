@@ -134,8 +134,9 @@ async function processEmail(job: Job<EmailJobPayload>) {
     await markJobSent(emailJobId);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    // If we've hit max attempts, mark as failed in DB
-    if (job.attemptsMade >= (worker.opts.settings?.maxStalledCount || 3)) {
+    // If we've hit max attempts (configured in job options, default 3), mark as failed in DB
+    const maxAttempts = job.opts.attempts || 3;
+    if (job.attemptsMade >= maxAttempts) {
       await markJobFailed(emailJobId, msg);
     }
     throw err; // let BullMQ handle retry logic
