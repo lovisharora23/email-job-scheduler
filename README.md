@@ -10,7 +10,12 @@ I went with **BullMQ** here instead of basic cron jobs because you explicitly ne
 - **Rate limiting**: I used a Redis tracking key pattern (`rate:{senderId}:{currentHourWindow}`) and `INCR`. If a sender hits the limit, we don't drop the work — we reschedule the job with a `delay` pushing it into the *next* hour bucket.
 - **Concurrency**: `WORKER_CONCURRENCY` handles standard BullMQ parallel processing.
 
-## 🚀 Technical Feature Mapping
+## 🚀 Feature Highlights
+
+- **Backend**: Job Scheduler (BullMQ), Database Persistence (Prisma), Hourly Rate Limiting (Redis), and Worker Concurrency.
+- **Frontend**: Google Login (OAuth), User Dashboard, Email Compose Modal (CSV Support), and Interactive Data Tables.
+
+## 📊 Technical Feature Mapping
 
 | Component | Backend / Infrastructure | Frontend / UI |
 |---|---|---|
