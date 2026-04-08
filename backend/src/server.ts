@@ -12,6 +12,8 @@ import emailsRouter from "./routes/emails";
 import sendersRouter from "./routes/senders";
 import { createEtherealAccount } from "./lib/mailer";
 
+import prisma from "./lib/prisma";
+
 const app = express();
 const PORT = process.env.PORT || 4000;
 
@@ -56,12 +58,31 @@ app.use("/api/senders", sendersRouter);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-async function start() {
-  // create Ethereal account if creds not provided — handy for first run
-  if (!process.env.ETHEREAL_USER || !process.env.ETHEREAL_PASS) {
-    await createEtherealAccount();
-    console.log("💡 Add the above creds to your .env as ETHEREAL_USER and ETHEREAL_PASS");
+async function ensureDefaultSender() {
+  // Check if any sender exists already
+  const existingCount = await prisma.sender.count();
+  if (existingCount > 0) {
+    console.log("📧 Sender(s) already configured — skipping Ethereal setup.");
+    return;
   }
+
+  // Create an Ethereal test account and register it as a sender
+  const account = await createEtherealAccount();
+  await prisma.sender.create({
+    data: {
+      email: account.user,
+      smtpHost: account.smtp.host,
+      smtpPort: String(account.smtp.port),
+      smtpUser: account.user,
+      smtpPass: account.pass,
+      hourlyLimit: 100,
+    },
+  });
+  console.log(`✅ Default Ethereal sender registered: ${account.user}`);
+}
+
+async function start() {
+  await ensureDefaultSender();
 
   app.listen(PORT, () => {
     console.log(`🚀 ReachInbox API running on http://localhost:${PORT}`);
