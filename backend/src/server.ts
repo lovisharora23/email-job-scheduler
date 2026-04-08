@@ -27,6 +27,8 @@ app.use(express.json());
 const redisClient = createClient({ url: process.env.REDIS_URL || "redis://localhost:6379" });
 redisClient.connect().catch(console.error);
 
+app.set("trust proxy", 1);
+
 app.use(
   session({
     store: new RedisStore({ client: redisClient, ttl: 86400 }),
@@ -36,6 +38,7 @@ app.use(
     cookie: {
       secure: process.env.NODE_ENV === "production",
       httpOnly: true,
+      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
       maxAge: 7 * 24 * 60 * 60 * 1000, // 1 week
     },
   })
