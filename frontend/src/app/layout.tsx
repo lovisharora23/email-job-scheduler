@@ -13,23 +13,19 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={inter.variable}>
-      <body className="antialiased min-h-screen" style={{ background: "#f8f9fa" }}>
+      <body className="antialiased">
         <Toaster
           position="top-right"
           toastOptions={{
             style: {
               background: "#1a1a2e",
               color: "#fff",
-              borderRadius: "10px",
-              fontSize: "14px",
-              padding: "12px 16px",
+              borderRadius: "8px",
+              fontSize: "13px",
+              padding: "10px 14px",
             },
-            success: {
-              iconTheme: { primary: "#22c55e", secondary: "#fff" },
-            },
-            error: {
-              iconTheme: { primary: "#ef4444", secondary: "#fff" },
-            },
+            success: { iconTheme: { primary: "#22c55e", secondary: "#fff" } },
+            error: { iconTheme: { primary: "#ef4444", secondary: "#fff" } },
           }}
         />
         {children}

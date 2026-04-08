@@ -3,28 +3,22 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
-import { Mail, LogOut, RefreshCw, Plus, Calendar, Send, AlertCircle, Clock, Search } from "lucide-react";
-import { getMe, getScheduledEmails, getSentEmails, logout } from "@/lib/api";
-import type { User, EmailJob } from "@/types";
-import { ComposeModal } from "@/components/ComposeModal";
+import {
+  Clock, Send, Search, RefreshCw, Filter, Star, ArrowLeft,
+  ChevronDown, Paperclip, X, Upload, LogOut
+} from "lucide-react";
+import { getMe, getScheduledEmails, getSentEmails, logout, getSenders, scheduleEmails } from "@/lib/api";
+import type { User, EmailJob, Sender } from "@/types";
 import { formatDate } from "@/lib/utils";
+import { useRef } from "react";
 
+type View = "list" | "compose" | "detail";
 type Tab = "scheduled" | "sent";
 
-function StatusBadge({ status }: { status: string }) {
-  const config: Record<string, { bg: string; color: string; dotColor: string; label: string }> = {
-    scheduled: { bg: "#dbeafe", color: "#1d4ed8", dotColor: "#3b82f6", label: "Scheduled" },
-    sent: { bg: "#dcfce7", color: "#15803d", dotColor: "#22c55e", label: "Sent" },
-    failed: { bg: "#fee2e2", color: "#b91c1c", dotColor: "#ef4444", label: "Failed" },
-    rescheduled: { bg: "#fef3c7", color: "#92400e", dotColor: "#f59e0b", label: "Rescheduled" },
-  };
-  const c = config[status] || config.scheduled;
-  return (
-    <span className="badge" style={{ background: c.bg, color: c.color }}>
-      <span className="badge-dot" style={{ background: c.dotColor }} />
-      {c.label}
-    </span>
-  );
+function stripHtml(html: string) {
+  const tmp = typeof document !== "undefined" ? document.createElement("div") : null;
+  if (tmp) { tmp.innerHTML = html; return tmp.textContent || tmp.innerText || ""; }
+  return html.replace(/<[^>]*>/g, "");
 }
 
 export default function DashboardPage() {
@@ -33,55 +27,115 @@ export default function DashboardPage() {
   const [tab, setTab] = useState<Tab>("scheduled");
   const [scheduled, setScheduled] = useState<EmailJob[]>([]);
   const [sent, setSent] = useState<EmailJob[]>([]);
+  const [view, setView] = useState<View>("list");
+  const [selectedEmail, setSelectedEmail] = useState<EmailJob | null>(null);
+  const [search, setSearch] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const [loadingScheduled, setLoadingScheduled] = useState(true);
   const [loadingSent, setLoadingSent] = useState(true);
-  const [composeOpen, setComposeOpen] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [search, setSearch] = useState("");
+
+  // Compose state
+  const [senders, setSenders] = useState<Sender[]>([]);
+  const [composeLoading, setComposeLoading] = useState(false);
+  const [emails, setEmails] = useState<string[]>([]);
+  const [manualEmail, setManualEmail] = useState("");
+  const [showSendLater, setShowSendLater] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [form, setForm] = useState({
+    subject: "",
+    body: "",
+    senderId: "",
+    startAt: "",
+    delayBetweenEmails: 0,
+    hourlyLimit: 0,
+  });
 
   useEffect(() => {
-    getMe()
-      .then(setUser)
-      .catch(() => router.push("/login"));
+    getMe().then(setUser).catch(() => router.push("/login"));
   }, [router]);
 
   const fetchScheduled = useCallback(async () => {
-    try {
-      const data = await getScheduledEmails();
-      setScheduled(data);
-    } catch {
-      // swallow
-    } finally {
-      setLoadingScheduled(false);
-    }
+    try { setScheduled(await getScheduledEmails()); }
+    catch { /* */ }
+    finally { setLoadingScheduled(false); }
   }, []);
-
   const fetchSent = useCallback(async () => {
-    try {
-      const data = await getSentEmails();
-      setSent(data);
-    } catch {
-      // swallow
-    } finally {
-      setLoadingSent(false);
-    }
+    try { setSent(await getSentEmails()); }
+    catch { /* */ }
+    finally { setLoadingSent(false); }
   }, []);
 
   useEffect(() => {
-    fetchScheduled();
-    fetchSent();
-    const interval = setInterval(() => {
-      fetchScheduled();
-      fetchSent();
-    }, 10_000);
-    return () => clearInterval(interval);
+    fetchScheduled(); fetchSent();
+    const i = setInterval(() => { fetchScheduled(); fetchSent(); }, 10_000);
+    return () => clearInterval(i);
   }, [fetchScheduled, fetchSent]);
 
   async function handleRefresh() {
     setRefreshing(true);
     await Promise.all([fetchScheduled(), fetchSent()]);
     setRefreshing(false);
-    toast.success("Refreshed");
+  }
+
+  function openCompose() {
+    setView("compose");
+    getSenders().then(s => {
+      setSenders(s);
+      if (s.length > 0) setForm(f => ({ ...f, senderId: s[0].id }));
+    }).catch(() => toast.error("Failed to load senders"));
+  }
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string;
+      const parsed = text.split(/[\n,;\r]+/).map(s => s.trim().toLowerCase())
+        .filter(s => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s));
+      const unique = Array.from(new Set([...emails, ...parsed]));
+      setEmails(unique);
+      toast.success(`${unique.length - emails.length} addresses added`);
+    };
+    reader.readAsText(file);
+  }
+
+  function addEmail() {
+    const em = manualEmail.trim().toLowerCase();
+    if (!em) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) { toast.error("Invalid email"); return; }
+    if (emails.includes(em)) { toast.error("Already added"); return; }
+    setEmails([...emails, em]);
+    setManualEmail("");
+  }
+
+  async function handleSchedule() {
+    if (!emails.length) { toast.error("Add recipients"); return; }
+    if (!form.senderId) { toast.error("No sender configured"); return; }
+    if (!form.startAt) { toast.error("Pick a date/time"); return; }
+
+    setComposeLoading(true);
+    try {
+      const res = await scheduleEmails({
+        emails,
+        subject: form.subject,
+        body: form.body,
+        senderId: form.senderId,
+        startAt: new Date(form.startAt).toISOString(),
+        delayBetweenEmails: form.delayBetweenEmails,
+        hourlyLimit: form.hourlyLimit || 100,
+      });
+      toast.success(`${res.created} email${res.created !== 1 ? "s" : ""} scheduled!`);
+      setView("list");
+      setEmails([]);
+      setForm({ subject: "", body: "", senderId: senders[0]?.id || "", startAt: "", delayBetweenEmails: 0, hourlyLimit: 0 });
+      setShowSendLater(false);
+      fetchScheduled();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setComposeLoading(false);
+    }
   }
 
   async function handleLogout() {
@@ -92,265 +146,335 @@ export default function DashboardPage() {
   if (!user) {
     return (
       <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div className="spinner" style={{ width: 32, height: 32, borderWidth: 3, borderColor: "#e5e7eb", borderTopColor: "#4f46e5" }} />
+        <div className="spinner" style={{ width: 28, height: 28 }} />
       </div>
     );
   }
 
   const currentJobs = tab === "scheduled" ? scheduled : sent;
-  const filteredJobs = search
-    ? currentJobs.filter(j =>
-        j.toEmail.toLowerCase().includes(search.toLowerCase()) ||
-        j.subject.toLowerCase().includes(search.toLowerCase())
-      )
-    : currentJobs;
   const loading = tab === "scheduled" ? loadingScheduled : loadingSent;
+  const filteredJobs = search
+    ? currentJobs.filter(j => j.toEmail.includes(search.toLowerCase()) || j.subject.toLowerCase().includes(search.toLowerCase()))
+    : currentJobs;
 
-  const stats = [
-    { label: "Scheduled", value: scheduled.filter(j => j.status === "scheduled").length, icon: Clock, color: "#3b82f6", bg: "#dbeafe" },
-    { label: "Rescheduled", value: scheduled.filter(j => j.status === "rescheduled").length, icon: Calendar, color: "#f59e0b", bg: "#fef3c7" },
-    { label: "Sent", value: sent.filter(j => j.status === "sent").length, icon: Send, color: "#22c55e", bg: "#dcfce7" },
-    { label: "Failed", value: sent.filter(j => j.status === "failed").length, icon: AlertCircle, color: "#ef4444", bg: "#fee2e2" },
-  ];
+  // Quick schedule helpers
+  function setQuickSchedule(hours: number) {
+    const d = new Date();
+    d.setHours(d.getHours() + hours);
+    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    setForm(f => ({ ...f, startAt: local }));
+    setShowSendLater(false);
+    handleSchedule();
+  }
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f8f9fa" }}>
-      {/* Header */}
-      <header style={{
-        background: "white",
-        borderBottom: "1px solid #e5e7eb",
-        position: "sticky",
-        top: 0,
-        zIndex: 40,
-      }}>
-        <div style={{
-          maxWidth: "1200px",
-          margin: "0 auto",
-          padding: "12px 24px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}>
-          {/* Logo */}
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <div style={{
-              width: "36px", height: "36px", borderRadius: "10px",
-              background: "linear-gradient(135deg, #4f46e5, #7c3aed)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              boxShadow: "0 2px 8px rgba(79,70,229,0.25)",
-            }}>
-              <Mail style={{ width: 18, height: 18, color: "white" }} />
-            </div>
-            <span style={{ fontSize: "18px", fontWeight: 700, color: "#1a1a2e" }}>ReachInbox</span>
+    <div style={{ display: "flex", minHeight: "100vh" }}>
+      {/* ====== SIDEBAR ====== */}
+      <aside className="sidebar">
+        <div className="sidebar-logo">ReachInbox</div>
+
+        {/* User */}
+        <div className="sidebar-user">
+          {user.avatarUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={user.avatarUrl} alt={user.name} className="sidebar-user-avatar" />
+          ) : (
+            <div className="sidebar-user-avatar-fallback">{user.name[0]}</div>
+          )}
+          <div className="sidebar-user-info">
+            <span className="sidebar-user-name">{user.name}</span>
+            <span className="sidebar-user-email">{user.email}</span>
           </div>
-
-          {/* Right side */}
-          <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-            <button
-              id="compose-btn"
-              onClick={() => setComposeOpen(true)}
-              className="btn-primary"
-            >
-              <Plus style={{ width: 16, height: 16 }} />
-              Compose New Email
-            </button>
-
-            {/* user chip */}
-            <div style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "10px",
-              paddingLeft: "16px",
-              borderLeft: "1px solid #e5e7eb",
-            }}>
-              {user.avatarUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={user.avatarUrl}
-                  alt={user.name}
-                  style={{ width: 32, height: 32, borderRadius: "50%", border: "2px solid #e5e7eb" }}
-                />
-              ) : (
-                <div style={{
-                  width: 32, height: 32, borderRadius: "50%",
-                  background: "#eef2ff", border: "2px solid #c7d2fe",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: "13px", fontWeight: 700, color: "#4f46e5",
-                }}>
-                  {user.name[0]}
-                </div>
-              )}
-              <div style={{ display: "flex", flexDirection: "column" }}>
-                <span style={{ fontSize: "13px", fontWeight: 600, color: "#1a1a2e" }}>{user.name}</span>
-                <span style={{ fontSize: "11px", color: "#9ca3af" }}>{user.email}</span>
-              </div>
-              <button
-                id="logout-btn"
-                onClick={handleLogout}
-                style={{
-                  padding: "6px", background: "none", border: "none",
-                  color: "#9ca3af", cursor: "pointer", borderRadius: "8px",
-                  transition: "all 0.2s",
-                }}
-                onMouseEnter={e => { e.currentTarget.style.background = "#f3f4f6"; e.currentTarget.style.color = "#1a1a2e"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "none"; e.currentTarget.style.color = "#9ca3af"; }}
-                title="Sign out"
-              >
-                <LogOut style={{ width: 16, height: 16 }} />
-              </button>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* Main */}
-      <main style={{ maxWidth: "1200px", margin: "0 auto", padding: "32px 24px" }}>
-        {/* Stats */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "16px", marginBottom: "32px" }}>
-          {stats.map(({ label, value, icon: Icon, color, bg }) => (
-            <div key={label} className="stat-card animate-fadeIn">
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
-                <span style={{ fontSize: "13px", fontWeight: 500, color: "#6b7280" }}>{label}</span>
-                <div style={{ width: 36, height: 36, borderRadius: "10px", background: bg, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <Icon style={{ width: 18, height: 18, color }} />
-                </div>
-              </div>
-              <span style={{ fontSize: "32px", fontWeight: 700, color: "#1a1a2e" }}>{value}</span>
-            </div>
-          ))}
+          <ChevronDown style={{ width: 14, height: 14, color: "#9ca3af", flexShrink: 0 }} />
         </div>
 
-        {/* Email Table Card */}
-        <div className="card animate-slideUp" style={{ overflow: "hidden" }}>
-          {/* Tab bar */}
-          <div style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "0 24px",
-            borderBottom: "1px solid #e5e7eb",
-          }}>
-            <div style={{ display: "flex", gap: "4px" }}>
-              {(["scheduled", "sent"] as Tab[]).map((t) => (
-                <button
-                  key={t}
-                  id={`tab-${t}`}
-                  onClick={() => setTab(t)}
-                  className={`tab-btn ${tab === t ? "active" : ""}`}
-                >
-                  {t === "scheduled" ? "📅 Scheduled Emails" : "📤 Sent Emails"}
-                </button>
-              ))}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              {/* Search */}
-              <div style={{ position: "relative" }}>
-                <Search style={{ width: 14, height: 14, position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#9ca3af" }} />
+        {/* Compose */}
+        <button id="compose-btn" className="compose-btn" onClick={openCompose}>
+          Compose
+        </button>
+
+        {/* Nav */}
+        <div className="sidebar-section-label">Core</div>
+        <button
+          className={`sidebar-nav-item ${tab === "scheduled" && view === "list" ? "active" : ""}`}
+          onClick={() => { setTab("scheduled"); setView("list"); }}
+        >
+          <Clock style={{ width: 16, height: 16 }} />
+          Scheduled
+          <span className="sidebar-nav-count">{scheduled.length}</span>
+        </button>
+        <button
+          className={`sidebar-nav-item ${tab === "sent" && view === "list" ? "active" : ""}`}
+          onClick={() => { setTab("sent"); setView("list"); }}
+        >
+          <Send style={{ width: 16, height: 16 }} />
+          Sent
+          <span className="sidebar-nav-count">{sent.length}</span>
+        </button>
+
+        {/* Logout at bottom */}
+        <div style={{ marginTop: "auto" }}>
+          <button className="sidebar-nav-item" onClick={handleLogout} id="logout-btn">
+            <LogOut style={{ width: 16, height: 16 }} />
+            Sign Out
+          </button>
+        </div>
+      </aside>
+
+      {/* ====== MAIN ====== */}
+      <div className="main-content">
+        {/* === LIST VIEW === */}
+        {view === "list" && (
+          <>
+            <div className="topbar">
+              <div className="search-box">
+                <Search style={{ width: 15, height: 15 }} />
                 <input
-                  type="text"
-                  placeholder="Search emails..."
+                  placeholder="Search"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
-                  style={{
-                    padding: "8px 12px 8px 32px",
-                    border: "1px solid #e5e7eb",
-                    borderRadius: "8px",
-                    fontSize: "13px",
-                    outline: "none",
-                    width: "200px",
-                    transition: "all 0.2s",
-                  }}
-                  onFocus={e => e.currentTarget.style.borderColor = "#4f46e5"}
-                  onBlur={e => e.currentTarget.style.borderColor = "#e5e7eb"}
                 />
               </div>
-              <button
-                onClick={handleRefresh}
-                style={{
-                  padding: "8px", background: "none", border: "1px solid #e5e7eb",
-                  borderRadius: "8px", cursor: "pointer", color: "#6b7280",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  transition: "all 0.2s",
-                }}
-                onMouseEnter={e => { e.currentTarget.style.background = "#f3f4f6"; }}
-                onMouseLeave={e => { e.currentTarget.style.background = "none"; }}
-                title="Refresh"
-              >
-                <RefreshCw style={{ width: 14, height: 14, ...(refreshing ? { animation: "spin 1s linear infinite" } : {}) }} />
+              <div className="topbar-actions">
+                <button className="icon-btn" title="Filter"><Filter style={{ width: 15, height: 15 }} /></button>
+                <button className="icon-btn" title="Refresh" onClick={handleRefresh}>
+                  <RefreshCw style={{ width: 15, height: 15, ...(refreshing ? { animation: "spin 1s linear infinite" } : {}) }} />
+                </button>
+              </div>
+            </div>
+
+            <div className="animate-fadeIn">
+              {loading ? (
+                <div className="empty-state">
+                  <div className="spinner" style={{ width: 24, height: 24, marginBottom: 12 }} />
+                  <p style={{ fontSize: 13, color: "#9ca3af" }}>Loading...</p>
+                </div>
+              ) : filteredJobs.length === 0 ? (
+                <div className="empty-state">
+                  <div className="empty-state-icon">
+                    {tab === "scheduled" ? <Clock style={{ width: 22, height: 22, color: "#9ca3af" }} /> : <Send style={{ width: 22, height: 22, color: "#9ca3af" }} />}
+                  </div>
+                  <h3>{search ? "No results" : tab === "scheduled" ? "No scheduled emails" : "No sent emails"}</h3>
+                  <p>{search ? "Try a different search." : "Click Compose to get started."}</p>
+                </div>
+              ) : (
+                filteredJobs.map(job => (
+                  <div
+                    key={job.id}
+                    className="email-row"
+                    onClick={() => { setSelectedEmail(job); setView("detail"); }}
+                  >
+                    <span className="email-row-to">To: {job.toEmail.split("@")[0]}</span>
+                    <span className={`email-row-time ${job.status === "sent" ? "time-sent" : "time-scheduled"}`}>
+                      <Clock style={{ width: 10, height: 10 }} />
+                      {formatDate(tab === "scheduled" ? job.scheduledAt : job.sentAt)}
+                    </span>
+                    <span className="email-row-subject">{job.subject}</span>
+                    <span style={{ margin: "0 4px", color: "#d1d5db" }}>-</span>
+                    <span className="email-row-preview">{stripHtml(job.body)}</span>
+                    <Star className="email-row-star" style={{ width: 16, height: 16 }} />
+                  </div>
+                ))
+              )}
+            </div>
+          </>
+        )}
+
+        {/* === COMPOSE VIEW === */}
+        {view === "compose" && (
+          <div className="compose-page animate-fadeIn">
+            <div className="compose-header">
+              <button className="back-btn" onClick={() => setView("list")}>
+                <ArrowLeft style={{ width: 18, height: 18 }} />
               </button>
+              <h2>Compose New Email</h2>
+              <div className="compose-header-actions">
+                <button className="icon-btn"><Paperclip style={{ width: 15, height: 15 }} /></button>
+                <button className="icon-btn"><Clock style={{ width: 15, height: 15 }} /></button>
+                <div style={{ position: "relative" }}>
+                  <button className="send-later-btn" onClick={() => setShowSendLater(!showSendLater)}>
+                    Send Later
+                  </button>
+                  {showSendLater && (
+                    <div className="send-later-dropdown">
+                      <label style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", display: "block", marginBottom: 6 }}>Pick date & time</label>
+                      <input
+                        type="datetime-local"
+                        value={form.startAt}
+                        onChange={e => setForm(f => ({ ...f, startAt: e.target.value }))}
+                      />
+                      <button className="send-later-option" onClick={() => {
+                        const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0);
+                        setForm(f => ({ ...f, startAt: new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,16) }));
+                      }}>
+                        Tomorrow<span>Tomorrow, 9:00 AM</span>
+                      </button>
+                      <button className="send-later-option" onClick={() => {
+                        const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(10, 0, 0, 0);
+                        setForm(f => ({ ...f, startAt: new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,16) }));
+                      }}>
+                        Tomorrow, 10:00 AM
+                      </button>
+                      <button className="send-later-option" onClick={() => {
+                        const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(11, 0, 0, 0);
+                        setForm(f => ({ ...f, startAt: new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,16) }));
+                      }}>
+                        Tomorrow, 11:00 AM
+                      </button>
+                      <button className="send-later-option" onClick={() => {
+                        const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(15, 0, 0, 0);
+                        setForm(f => ({ ...f, startAt: new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,16) }));
+                      }}>
+                        Tomorrow, 3:00 PM
+                      </button>
+                      <div className="send-later-footer">
+                        <button className="cancel-btn" onClick={() => setShowSendLater(false)}>Cancel</button>
+                        <button className="done-btn" onClick={() => { setShowSendLater(false); handleSchedule(); }} disabled={!form.startAt || composeLoading}>
+                          {composeLoading ? "..." : "Done"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <button className="send-btn" onClick={handleSchedule} disabled={composeLoading}>
+                  {composeLoading ? <span className="spinner" style={{ width: 14, height: 14, borderColor: "rgba(255,255,255,0.3)", borderTopColor: "white" }} /> : "Send"}
+                </button>
+              </div>
+            </div>
+
+            <div className="compose-body">
+              {/* From */}
+              <div className="compose-field">
+                <span className="compose-field-label">From</span>
+                <select
+                  value={form.senderId}
+                  onChange={e => setForm(f => ({ ...f, senderId: e.target.value }))}
+                  style={{ border: "1px solid #e5e7eb", borderRadius: 6, padding: "4px 8px", fontSize: 13, fontFamily: "inherit", background: "#f9fafb", color: "#1a1a2e", outline: "none" }}
+                >
+                  {senders.length === 0 && <option value="">No senders</option>}
+                  {senders.map(s => <option key={s.id} value={s.id}>{s.email}</option>)}
+                </select>
+                <ChevronDown style={{ width: 12, height: 12, color: "#9ca3af", marginLeft: -4 }} />
+              </div>
+
+              {/* To */}
+              <div className="compose-field">
+                <span className="compose-field-label">To</span>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, flex: 1, alignItems: "center" }}>
+                  {emails.map((em, i) => (
+                    <span key={i} className="chip">
+                      {em}
+                      <button onClick={() => setEmails(emails.filter((_, idx) => idx !== i))}><X style={{ width: 10, height: 10 }} /></button>
+                    </span>
+                  ))}
+                  {emails.length > 3 && <span style={{ fontSize: 12, color: "#16a34a", fontWeight: 600 }}>+{emails.length - 3}</span>}
+                  <input
+                    className="compose-field-input"
+                    placeholder={emails.length ? "" : "recipient@example.com"}
+                    value={manualEmail}
+                    onChange={e => setManualEmail(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addEmail(); } }}
+                    style={{ minWidth: 140 }}
+                  />
+                </div>
+                <div className="compose-field-right">
+                  <button className="upload-list-btn" onClick={() => fileRef.current?.click()}>
+                    <Upload style={{ width: 14, height: 14 }} /> Upload List
+                  </button>
+                  <input ref={fileRef} type="file" accept=".csv,.txt" style={{ display: "none" }} onChange={handleFileChange} />
+                </div>
+              </div>
+
+              {/* Subject */}
+              <div className="compose-field">
+                <span className="compose-field-label">Subject</span>
+                <input
+                  className="compose-field-input"
+                  placeholder="Subject"
+                  value={form.subject}
+                  onChange={e => setForm(f => ({ ...f, subject: e.target.value }))}
+                />
+              </div>
+
+              {/* Delay & Hourly Limit */}
+              <div className="compose-inline-row">
+                <div className="compose-inline-field">
+                  <label>Delay between 2 emails</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={form.delayBetweenEmails}
+                    onChange={e => setForm(f => ({ ...f, delayBetweenEmails: Number(e.target.value) }))}
+                  />
+                </div>
+                <div className="compose-inline-field">
+                  <label>Hourly Limit</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={form.hourlyLimit}
+                    onChange={e => setForm(f => ({ ...f, hourlyLimit: Number(e.target.value) }))}
+                  />
+                </div>
+              </div>
+
+              {/* Body */}
+              <textarea
+                className="compose-textarea"
+                placeholder="Type Your Reply..."
+                value={form.body}
+                onChange={e => setForm(f => ({ ...f, body: e.target.value }))}
+              />
             </div>
           </div>
+        )}
 
-          {/* Table */}
-          <div style={{ padding: "0" }}>
-            {loading ? (
-              <div style={{ padding: "64px", textAlign: "center" }}>
-                <div className="spinner" style={{ width: 24, height: 24, margin: "0 auto 12px", borderColor: "#e5e7eb", borderTopColor: "#4f46e5" }} />
-                <p style={{ fontSize: "14px", color: "#9ca3af" }}>Loading emails...</p>
+        {/* === DETAIL VIEW === */}
+        {view === "detail" && selectedEmail && (
+          <div className="animate-fadeIn">
+            <div className="detail-header">
+              <button className="back-btn" onClick={() => setView("list")}>
+                <ArrowLeft style={{ width: 18, height: 18 }} />
+              </button>
+              <h2>{selectedEmail.subject}</h2>
+              <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+                <span className={`status-badge ${
+                  selectedEmail.status === "sent" ? "time-sent" :
+                  selectedEmail.status === "failed" ? "time-scheduled" :
+                  "time-scheduled"
+                }`} style={{ textTransform: "capitalize" }}>
+                  {selectedEmail.status}
+                </span>
               </div>
-            ) : filteredJobs.length === 0 ? (
-              <div style={{ padding: "64px", textAlign: "center" }}>
-                <div style={{
-                  width: 56, height: 56, borderRadius: "50%",
-                  background: "#f3f4f6", margin: "0 auto 16px",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                }}>
-                  <Mail style={{ width: 24, height: 24, color: "#9ca3af" }} />
+            </div>
+
+            <div className="detail-body">
+              <div className="detail-sender">
+                <div className="detail-sender-avatar" style={{ background: "#22c55e" }}>
+                  {(selectedEmail.sender?.email || "?")[0].toUpperCase()}
                 </div>
-                <p style={{ fontSize: "16px", fontWeight: 600, color: "#374151", marginBottom: "4px" }}>
-                  {search ? "No matching emails" : tab === "scheduled" ? "No scheduled emails yet" : "Nothing sent yet"}
-                </p>
-                <p style={{ fontSize: "14px", color: "#9ca3af" }}>
-                  {search ? "Try a different search term." : "Click \'Compose New Email\' to get started."}
-                </p>
+                <div className="detail-sender-info">
+                  <div className="detail-sender-name">
+                    {selectedEmail.sender?.email || "Unknown Sender"}
+                  </div>
+                  <div className="detail-sender-email">to {selectedEmail.toEmail}</div>
+                </div>
+                <div className="detail-sender-date">
+                  {formatDate(selectedEmail.scheduledAt)}
+                </div>
               </div>
-            ) : (
-              <table className="data-table" style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={{ textAlign: "left" }}>Recipient</th>
-                    <th style={{ textAlign: "left" }}>Subject</th>
-                    <th style={{ textAlign: "left" }}>Sender</th>
-                    <th style={{ textAlign: "left" }}>{tab === "scheduled" ? "Scheduled At" : "Sent At"}</th>
-                    <th style={{ textAlign: "left", width: 120 }}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredJobs.map((job) => (
-                    <tr key={job.id}>
-                      <td style={{ fontFamily: "monospace", fontSize: "13px", color: "#374151" }}>{job.toEmail}</td>
-                      <td style={{ color: "#374151", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {job.subject}
-                      </td>
-                      <td style={{ fontSize: "13px", color: "#6b7280" }}>{job.sender?.email || "—"}</td>
-                      <td style={{ fontSize: "13px", color: "#6b7280" }}>
-                        {formatDate(tab === "scheduled" ? job.scheduledAt : job.sentAt)}
-                      </td>
-                      <td>
-                        <StatusBadge status={job.status} />
-                        {job.status === "failed" && job.error && (
-                          <div style={{ fontSize: "11px", color: "#ef4444", marginTop: "4px", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={job.error}>
-                            {job.error}
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
-      </main>
 
-      <ComposeModal
-        open={composeOpen}
-        onClose={() => setComposeOpen(false)}
-        onScheduled={() => {
-          fetchScheduled();
-          setTab("scheduled");
-        }}
-      />
+              <div className="detail-email-body" dangerouslySetInnerHTML={{ __html: selectedEmail.body }} />
+
+              {selectedEmail.error && (
+                <div style={{ marginTop: 20, padding: "12px 16px", background: "#fee2e2", borderRadius: 8, fontSize: 13, color: "#b91c1c" }}>
+                  <strong>Error:</strong> {selectedEmail.error}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
