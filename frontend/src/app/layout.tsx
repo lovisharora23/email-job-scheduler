@@ -6,22 +6,29 @@ import { Toaster } from "react-hot-toast";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "ReachInbox Scheduler",
-  description: "Production-grade email job scheduler built on BullMQ + PostgreSQL",
+  title: "ReachInbox – Email Campaign Scheduler",
+  description: "Schedule and manage email campaigns with smart rate limiting and delivery tracking",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={inter.variable}>
-      <body className="antialiased bg-[#0a0a10] text-white min-h-screen">
+      <body className="antialiased min-h-screen" style={{ background: "#f8f9fa" }}>
         <Toaster
           position="top-right"
           toastOptions={{
             style: {
-              background: "#1e1e2e",
+              background: "#1a1a2e",
               color: "#fff",
-              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: "10px",
               fontSize: "14px",
+              padding: "12px 16px",
+            },
+            success: {
+              iconTheme: { primary: "#22c55e", secondary: "#fff" },
+            },
+            error: {
+              iconTheme: { primary: "#ef4444", secondary: "#fff" },
             },
           }}
         />

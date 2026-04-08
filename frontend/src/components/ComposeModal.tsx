@@ -3,9 +3,6 @@
 import { useState, useRef, useEffect } from "react";
 import toast from "react-hot-toast";
 import { Upload, X } from "lucide-react";
-import { Modal } from "./Modal";
-import { Button } from "./Button";
-import { Input, Textarea } from "./Input";
 import { getSenders, scheduleEmails } from "@/lib/api";
 import type { Sender } from "@/types";
 
@@ -19,6 +16,7 @@ export function ComposeModal({ open, onClose, onScheduled }: Props) {
   const [senders, setSenders] = useState<Sender[]>([]);
   const [loading, setLoading] = useState(false);
   const [emails, setEmails] = useState<string[]>([]);
+  const [manualEmail, setManualEmail] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [form, setForm] = useState({
@@ -51,22 +49,33 @@ export function ComposeModal({ open, onClose, onScheduled }: Props) {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const text = ev.target?.result as string;
-      // split on commas, newlines, semicolons — whatever the user throws at us
       const parsed = text
         .split(/[\n,;\r]+/)
         .map((s) => s.trim().toLowerCase())
-        .filter((s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s)); // strict email check
+        .filter((s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s));
       
-      const unique = Array.from(new Set(parsed)); // remove duplicates
+      const unique = Array.from(new Set([...emails, ...parsed]));
       setEmails(unique);
       
-      if (unique.length < parsed.length) {
-        toast.success(`${unique.length} addresses detected (${parsed.length - unique.length} duplicates removed)`);
-      } else {
-        toast.success(`${unique.length} addresses detected`);
-      }
+      const newCount = unique.length - emails.length;
+      toast.success(`${newCount} new address${newCount !== 1 ? "es" : ""} added (${unique.length} total)`);
     };
     reader.readAsText(file);
+  }
+
+  function addManualEmail() {
+    const em = manualEmail.trim().toLowerCase();
+    if (!em) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
+      toast.error("Invalid email address");
+      return;
+    }
+    if (emails.includes(em)) {
+      toast.error("Already added");
+      return;
+    }
+    setEmails([...emails, em]);
+    setManualEmail("");
   }
 
   function removeEmail(i: number) {
@@ -76,11 +85,15 @@ export function ComposeModal({ open, onClose, onScheduled }: Props) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (emails.length === 0) {
-      toast.error("No email addresses — upload a CSV or TXT file first");
+      toast.error("Add at least one recipient email address");
       return;
     }
     if (!form.senderId) {
-      toast.error("Select a sender");
+      toast.error("Select a sender account");
+      return;
+    }
+    if (!form.startAt) {
+      toast.error("Select a start time");
       return;
     }
 
@@ -95,10 +108,9 @@ export function ComposeModal({ open, onClose, onScheduled }: Props) {
         delayBetweenEmails: form.delayBetweenEmails,
         hourlyLimit: form.hourlyLimit,
       });
-      toast.success(`${res.created} emails scheduled!`);
+      toast.success(`🎉 ${res.created} email${res.created !== 1 ? "s" : ""} scheduled!`);
       onScheduled();
       onClose();
-      // reset
       setEmails([]);
       setForm({ subject: "", body: "", senderId: senders[0]?.id || "", startAt: "", delayBetweenEmails: 5, hourlyLimit: 100 });
     } catch (err) {
@@ -113,99 +125,165 @@ export function ComposeModal({ open, onClose, onScheduled }: Props) {
     setForm((prev) => ({ ...prev, [k]: val }));
   };
 
+  if (!open) return null;
+
   return (
-    <Modal open={open} onClose={onClose} title="Compose New Campaign" className="max-w-xl">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <Input label="Subject" placeholder="Your email subject..." required value={form.subject} onChange={f("subject")} />
-
-        <Textarea
-          label="Body (HTML supported)"
-          placeholder="<p>Hi there, ...</p>"
-          rows={4}
-          required
-          value={form.body}
-          onChange={f("body")}
-        />
-
-        {/* file upload */}
-        <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium text-white/70">Recipient List</label>
-          <div
-            className="border border-dashed border-white/20 rounded-lg p-4 flex flex-col items-center gap-2 cursor-pointer hover:border-indigo-500/50 transition-colors"
-            onClick={() => fileRef.current?.click()}
+    <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div style={{
+          padding: "20px 24px",
+          borderBottom: "1px solid #e5e7eb",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}>
+          <h2 style={{ fontSize: "18px", fontWeight: 700, color: "#1a1a2e" }}>Compose New Campaign</h2>
+          <button
+            onClick={onClose}
+            style={{
+              padding: "6px", background: "#f3f4f6", border: "none",
+              borderRadius: "8px", cursor: "pointer", color: "#6b7280",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              transition: "all 0.2s",
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = "#e5e7eb"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "#f3f4f6"; }}
           >
-            <Upload className="w-5 h-5 text-white/30" />
-            <span className="text-sm text-white/40">
-              {emails.length > 0 ? `${emails.length} addresses detected` : "Upload CSV or TXT"}
-            </span>
-            <input ref={fileRef} type="file" accept=".csv,.txt" className="hidden" onChange={handleFileChange} />
-          </div>
-          {/* preview first few */}
-          {emails.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-1 max-h-20 overflow-y-auto">
-              {emails.slice(0, 10).map((em, i) => (
-                <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/25 text-indigo-300 text-xs">
-                  {em}
-                  <button type="button" onClick={() => removeEmail(i)}><X className="w-2.5 h-2.5" /></button>
-                </span>
-              ))}
-              {emails.length > 10 && <span className="text-xs text-white/30 flex items-center">+{emails.length - 10} more</span>}
+            <X style={{ width: 16, height: 16 }} />
+          </button>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} style={{ padding: "24px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+            {/* Subject */}
+            <div>
+              <label className="form-label">Subject</label>
+              <input className="form-input" placeholder="Your email subject..." required value={form.subject} onChange={f("subject")} />
             </div>
-          )}
-        </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium text-white/70">Start Time</label>
-            <input
-              type="datetime-local"
-              required
-              value={form.startAt}
-              onChange={f("startAt")}
-              className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/50 transition-colors"
-            />
+            {/* Body */}
+            <div>
+              <label className="form-label">Body (HTML supported)</label>
+              <textarea
+                className="form-input"
+                placeholder="<p>Hi there, ...</p>"
+                rows={4}
+                required
+                value={form.body}
+                onChange={f("body")}
+                style={{ resize: "vertical" }}
+              />
+            </div>
+
+            {/* Recipients */}
+            <div>
+              <label className="form-label">Recipients</label>
+              {/* Manual input */}
+              <div style={{ display: "flex", gap: "8px", marginBottom: "8px" }}>
+                <input
+                  className="form-input"
+                  placeholder="Type email and press Enter..."
+                  value={manualEmail}
+                  onChange={e => setManualEmail(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addManualEmail(); } }}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  onClick={addManualEmail}
+                  className="btn-ghost"
+                  style={{ padding: "10px 16px", whiteSpace: "nowrap" }}
+                >
+                  Add
+                </button>
+              </div>
+              {/* File upload */}
+              <div
+                className="upload-zone"
+                onClick={() => fileRef.current?.click()}
+              >
+                <Upload style={{ width: 20, height: 20, color: "#9ca3af", margin: "0 auto 8px" }} />
+                <span style={{ fontSize: "13px", color: "#6b7280" }}>
+                  Or upload a CSV/TXT file with email addresses
+                </span>
+                <input ref={fileRef} type="file" accept=".csv,.txt" style={{ display: "none" }} onChange={handleFileChange} />
+              </div>
+              {/* Chips */}
+              {emails.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "10px", maxHeight: "80px", overflowY: "auto" }}>
+                  {emails.map((em, i) => (
+                    <span key={i} className="email-chip">
+                      {em}
+                      <button type="button" onClick={() => removeEmail(i)}><X style={{ width: 12, height: 12 }} /></button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {emails.length > 0 && (
+                <p style={{ fontSize: "12px", color: "#6b7280", marginTop: "6px" }}>{emails.length} recipient{emails.length !== 1 ? "s" : ""}</p>
+              )}
+            </div>
+
+            {/* Row: Start Time + Delay */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+              <div>
+                <label className="form-label">Start Time</label>
+                <input
+                  type="datetime-local"
+                  required
+                  value={form.startAt}
+                  onChange={f("startAt")}
+                  className="form-input"
+                />
+              </div>
+              <div>
+                <label className="form-label">Delay Between Emails (s)</label>
+                <input className="form-input" type="number" min={0} value={form.delayBetweenEmails} onChange={f("delayBetweenEmails")} />
+              </div>
+            </div>
+
+            {/* Row: Hourly Limit + Sender */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+              <div>
+                <label className="form-label">Hourly Limit</label>
+                <input className="form-input" type="number" min={1} value={form.hourlyLimit} onChange={f("hourlyLimit")} />
+              </div>
+              <div>
+                <label className="form-label">Sender Account</label>
+                <select
+                  value={form.senderId}
+                  onChange={f("senderId")}
+                  className="form-input"
+                  style={{ cursor: "pointer" }}
+                >
+                  {senders.length === 0 && <option value="">No senders configured</option>}
+                  {senders.map((s) => (
+                    <option key={s.id} value={s.id}>{s.email}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
           </div>
-          <Input
-            label="Delay Between Emails (s)"
-            type="number"
-            min={0}
-            value={form.delayBetweenEmails}
-            onChange={f("delayBetweenEmails")}
-          />
-        </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <Input
-            label="Hourly Limit"
-            type="number"
-            min={1}
-            value={form.hourlyLimit}
-            onChange={f("hourlyLimit")}
-          />
-          <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium text-white/70">Sender Account</label>
-            <select
-              value={form.senderId}
-              onChange={f("senderId")}
-              className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/50 transition-colors"
-            >
-              {senders.length === 0 && <option value="">No senders configured</option>}
-              {senders.map((s) => (
-                <option key={s.id} value={s.id} className="bg-[#13131a]">
-                  {s.email}
-                </option>
-              ))}
-            </select>
+          {/* Footer */}
+          <div style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: "12px",
+            paddingTop: "24px",
+            marginTop: "24px",
+            borderTop: "1px solid #e5e7eb",
+          }}>
+            <button type="button" className="btn-ghost" onClick={onClose}>Cancel</button>
+            <button type="submit" className="btn-primary" disabled={senders.length === 0 || loading}>
+              {loading && <span className="spinner" />}
+              Schedule Emails
+            </button>
           </div>
-        </div>
-
-        <div className="flex justify-end gap-3 pt-2 border-t border-white/8">
-          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button type="submit" loading={loading} disabled={senders.length === 0}>
-            Schedule Emails
-          </Button>
-        </div>
-      </form>
-    </Modal>
+        </form>
+      </div>
+    </div>
   );
 }
